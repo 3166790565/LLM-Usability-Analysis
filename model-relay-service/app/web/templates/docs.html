@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}API 文档{% endblock %}
+{% block content %}
+<div class="container">
+    <h3 class="mb-4">📖 API 对接文档</h3>
+
+    <div class="alert alert-info">
+        <strong>Base URL:</strong> <code>{{ base_url }}</code>（本地开发） /
+        <code>http://{{ local_ip }}:8000</code>（局域网）
+    </div>
+
+    <!-- 认证方式 -->
+    <div class="card mb-4">
+        <div class="card-header"><strong>认证方式</strong></div>
+        <div class="card-body">
+            <p>本项目作为中转服务，客户端不需要额外认证。但请求格式需与配置的中转站服务类型匹配。</p>
+            <p>客户端直接使用 OpenAI 兼容的 SDK 设置 <code>base_url</code> 为本服务地址即可。</p>
+        </div>
+    </div>
+
+    <!-- 模型列表 -->
+    <div class="card mb-4">
+        <div class="card-header"><strong>获取可用模型列表</strong></div>
+        <div class="card-body">
+            <pre class="bg-light p-3 rounded"><code>curl {{ base_url }}/v1/models \
+  -H "Authorization: Bearer sk-placeholder"</code></pre>
+            <p>返回所有启用的模型（使用别名）。</p>
+        </div>
+    </div>
+
+    <!-- OpenAI Chat Completions -->
+    <div class="card mb-4">
+        <div class="card-header"><strong>OpenAI Chat Completions 格式</strong></div>
+        <div class="card-body">
+            <p>兼容 OpenAI SDK：</p>
+            <pre class="bg-light p-3 rounded"><code>curl {{ base_url }}/v1/chat/completions \
+  -H "Authorization: Bearer sk-placeholder" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "your-model-alias",
+    "messages": [{"role": "user", "content": "你好"}],
+    "stream": false
+  }'</code></pre>
+            <p>Python 示例：</p>
+            <pre class="bg-light p-3 rounded"><code>from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-placeholder",
+    base_url="{{ base_url }}"
+)
+response = client.chat.completions.create(
+    model="your-model-alias",
+    messages=[{"role": "user", "content": "你好"}]
+)
+print(response.choices[0].message.content)</code></pre>
+        </div>
+    </div>
+
+    <!-- OpenAI Responses API -->
+    <div class="card mb-4">
+        <div class="card-header"><strong>OpenAI Responses API</strong></div>
+        <div class="card-body">
+            <pre class="bg-light p-3 rounded"><code>curl {{ base_url }}/v1/responses \
+  -H "Authorization: Bearer sk-placeholder" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "your-model-alias",
+    "input": "你好，你是谁？"
+  }'</code></pre>
+        </div>
+    </div>
+
+    <!-- Anthropic Messages API -->
+    <div class="card mb-4">
+        <div class="card-header"><strong>Anthropic Messages API</strong></div>
+        <div class="card-body">
+            <pre class="bg-light p-3 rounded"><code>curl {{ base_url }}/v1/messages \
+  -H "x-api-key: sk-placeholder" \
+  -H "content-type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "your-model-alias",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "你好，你是谁？"}]
+  }'</code></pre>
+        </div>
+    </div>
+
+    <!-- Gemini Format -->
+    <div class="card mb-4">
+        <div class="card-header"><strong>Gemini GenerateContent API</strong></div>
+        <div class="card-body">
+            <pre class="bg-light p-3 rounded"><code>curl "{{ base_url }}/v1beta/models/your-model-alias:generateContent" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contents": [
+      {"parts": [{"text": "你好，你是谁？"}]}
+    ]
+  }'</code></pre>
+        </div>
+    </div>
+
+    <!-- SDK 集成 -->
+    <div class="card mb-4">
+        <div class="card-header"><strong>SDK 集成（通用）</strong></div>
+        <div class="card-body">
+            <h6>Python (OpenAI SDK)</h6>
+            <pre class="bg-light p-3 rounded"><code>from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-placeholder",
+    base_url="{{ base_url }}"
+)
+
+# 列出可用模型
+models = client.models.list()
+for m in models:
+    print(m.id)
+
+# 对话补全
+response = client.chat.completions.create(
+    model="deepseek-v4-flash",  # 使用别名
+    messages=[{"role": "user", "content": "你好"}],
+    stream=True
+)
+for chunk in response:
+    print(chunk.choices[0].delta.content or "", end="")</code></pre>
+
+            <h6>Node.js (OpenAI SDK)</h6>
+            <pre class="bg-light p-3 rounded"><code>import OpenAI from 'openai';
+
+const client = new OpenAI({
+    apiKey: 'sk-placeholder',
+    baseURL: '{{ base_url }}'
+});
+
+const response = await client.chat.completions.create({
+    model: 'deepseek-v4-flash',
+    messages: [{role: 'user', content: '你好'}],
+    stream: true
+});
+for await (const chunk of response) {
+    process.stdout.write(chunk.choices[0]?.delta?.content || '');
+}</code></pre>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  model-relay:
+    build: .
+    container_name: model-relay-service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./runtime:/app/runtime
+    environment:
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

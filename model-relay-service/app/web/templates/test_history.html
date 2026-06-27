@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}{% if page_type == 'history' %}测试历史{% else %}测试控制{% endif %}{% endblock %}
+{% block content %}
+{% if page_type != 'history' %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>测试控制</h2>
+    <div>
+        <span id="statusBadge" class="badge {% if is_running %}bg-success{% else %}bg-secondary{% endif %} me-2">
+            {% if is_running %}测试中...{% else %}空闲{% endif %}
+        </span>
+        <button id="runTestBtn" class="btn btn-primary" onclick="runTest()" {% if is_running %}disabled{% endif %}>
+            立即测试
+        </button>
+    </div>
+</div>
+<hr>
+<h4>最近测试结果</h4>
+{% endif %}
+
+{% if page_type == 'history' %}
+<h2 class="mb-3">测试历史</h2>
+<form class="row g-3 mb-3" method="get" action="/ui/history">
+    <div class="col-auto">
+        <input type="text" name="model" class="form-control" placeholder="筛选模型/别名" value="{{ filter_model }}">
+    </div>
+    <div class="col-auto">
+        <button type="submit" class="btn btn-outline-primary">筛选</button>
+        <button type="button" class="btn btn-outline-secondary" onclick="document.querySelector('[name=model]').value='';this.form.submit()">清除</button>
+    </div>
+</form>
+{% endif %}
+
+<div class="table-responsive">
+    <table class="table table-sm table-striped">
+        <thead>
+            <tr>
+                <th>时间</th>
+                <th>中转站</th>
+                <th>模型（别名）</th>
+                <th>原始模型 ID</th>
+                <th>延迟 (ms)</th>
+                <th>状态</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in results %}
+            <tr class="{% if r.success %}table-success{% else %}table-danger{% endif %}">
+                <td>{{ r.tested_at }}</td>
+                <td>{{ r.provider_name or '' }}</td>
+                <td>{{ r.alias_name or '' }}</td>
+                <td><code>{{ r.model_id or '' }}</code></td>
+                <td>{{ "%.0f"|format(r.latency_ms) if r.latency_ms else '-' }}</td>
+                <td>
+                    {% if r.success %}
+                    <span class="text-success">✓ 可用</span>
+                    {% else %}
+                    <span class="text-danger" title="{{ r.error_message }}">✗ 不可用</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <button class="btn btn-sm btn-outline-info" onclick="showTestDetail({{ r.id }})">详情</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if page_type == 'history' %}
+<nav>
+    <ul class="pagination">
+        {% for i in range(1, total_pages + 1) %}
+        <li class="page-item {% if i == page %}active{% endif %}">
+            <a class="page-link" href="{{ url_for('history_page') }}?page={{ i }}{% if filter_model %}&model={{ filter_model }}{% endif %}">{{ i }}</a>
+        </li>
+        {% endfor %}
+    </ul>
+</nav>
+<p class="text-muted">共 {{ total }} 条记录</p>
+{% endif %}
+
+<!-- 测试详情弹窗 -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">测试详情</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="detailModalBody">
+                <div id="detailLoading" class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status"></div>
+                    <p class="mt-2">加载中...</p>
+                </div>
+                <div id="detailContent" style="display:none"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function showTestDetail(resultId) {
+    const modal = new bootstrap.Modal(document.getElementById('detailModal'));
+    document.getElementById('detailLoading').style.display = '';
+    document.getElementById('detailContent').style.display = 'none';
+    modal.show();
+
+    fetch('/ui/test/detail/' + resultId)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('detailLoading').style.display = 'none';
+            const content = document.getElementById('detailContent');
+            let html = '';
+            html += '<div class="mb-3"><strong>中转站：</strong>' + escapeHtml(data.provider_name) + '</div>';
+            html += '<div class="mb-3"><strong>原始模型 ID：</strong><code>' + escapeHtml(data.model_id) + '</code></div>';
+            html += '<div class="mb-3"><strong>别名：</strong>' + escapeHtml(data.alias_name) + '</div>';
+            html += '<div class="mb-3"><strong>延迟：</strong>' + data.latency_ms.toFixed(0) + ' ms</div>';
+            html += '<div class="mb-3"><strong>状态：</strong>' + (data.success ? '<span class="text-success">✓ 可用</span>' : '<span class="text-danger">✗ 不可用</span>') + '</div>';
+            if (!data.success && data.error_message) {
+                html += '<div class="mb-3"><strong>错误信息：</strong><pre class="text-danger">' + escapeHtml(data.error_message) + '</pre></div>';
+            }
+            html += '<ul class="nav nav-tabs" id="detailTabs" role="tablist">';
+            html += '<li class="nav-item" role="presentation"><button class="nav-link active" id="req-tab" data-bs-toggle="tab" data-bs-target="#req-pane" type="button">请求内容</button></li>';
+            html += '<li class="nav-item" role="presentation"><button class="nav-link" id="resp-tab" data-bs-toggle="tab" data-bs-target="#resp-pane" type="button">响应内容</button></li>';
+            html += '</ul>';
+            html += '<div class="tab-content mt-2" id="detailTabsContent">';
+            html += '<div class="tab-pane fade show active" id="req-pane"><pre class="bg-light p-3 rounded" style="max-height:400px;overflow:auto;font-size:12px">' + escapeHtml(data.request_body || '(无)') + '</pre></div>';
+            html += '<div class="tab-pane fade" id="resp-pane"><pre class="bg-light p-3 rounded" style="max-height:400px;overflow:auto;font-size:12px">' + escapeHtml(data.response_body || '(无)') + '</pre></div>';
+            html += '</div>';
+            content.innerHTML = html;
+            content.style.display = '';
+        })
+        .catch(e => {
+            document.getElementById('detailLoading').style.display = 'none';
+            document.getElementById('detailContent').innerHTML = '<div class="alert alert-danger">加载失败：' + e.message + '</div>';
+            document.getElementById('detailContent').style.display = '';
+        });
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+</script>
+{% endblock %}

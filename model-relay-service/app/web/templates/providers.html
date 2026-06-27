@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}中转站管理{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>中转站管理</h2>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addModal">+ 添加中转站</button>
+</div>
+
+<div class="table-responsive">
+    <table class="table table-striped table-hover">
+        <thead>
+            <tr>
+                <th>名称</th>
+                <th>URL</th>
+                <th>类型</th>
+                <th>API Keys</th>
+                <th>模型数</th>
+                <th>备注</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in providers %}
+            <tr>
+                <td>{{ p.name }}</td>
+                <td><code>{{ p.url }}</code></td>
+                <td>{{ p.service_type }}</td>
+                <td>{{ p.api_keys|length }} 个</td>
+                <td>{{ p.models|length }} 个</td>
+                <td>{{ p.remark or '' }}</td>
+                <td>
+                    <button class="btn btn-sm btn-warning" onclick="editProvider('{{ p.id }}')">编辑</button>
+                    <form method="post" action="/ui/providers/delete/{{ p.id }}" style="display:inline" onsubmit="return confirm('确认删除?')">
+                        <button class="btn btn-sm btn-danger">删除</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Provider data for JS -->
+<script id="providersData" type="application/json">{{ providers | tojson | safe }}</script>
+
+<!-- ========== Add Modal ========== -->
+<div class="modal fade" id="addModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <form method="post" action="/ui/providers/add" onsubmit="buildAddForm()">
+                <div class="modal-header">
+                    <h5 class="modal-title">添加中转站</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">名称</label>
+                                <input type="text" name="name" class="form-control" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">URL</label>
+                                <input type="url" name="url" id="addUrl" class="form-control" placeholder="https://api.example.com/v1" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">服务类型</label>
+                                <select name="service_type" id="addServiceType" class="form-control">
+                                <option value="openai">OpenAI Chat</option>
+                                <option value="openai_responses">OpenAI Responses</option>
+                                <option value="anthropic">Anthropic</option>
+                                <option value="gemini">Gemini</option>
+                                <option value="deepseek">DeepSeek</option>
+                            </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">API Keys</label>
+                                <div id="addApiKeysContainer">
+                                    <div class="api-key-item row g-2 mb-2 align-items-center">
+                                        <div class="col-5">
+                                            <input type="text" class="form-control form-control-sm" placeholder="API Key" data-key-field="key" required>
+                                        </div>
+                                        <div class="col-4">
+                                            <input type="text" class="form-control form-control-sm" placeholder="备注" data-key-field="remark">
+                                        </div>
+                                        <div class="col-3">
+                                            <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeKeyItem(this)">删除</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-success mt-1" onclick="addKeyItem('addApiKeysContainer')">+ 添加 Key</button>
+                                <input type="hidden" name="api_keys_json" id="addApiKeysJson" value="[]">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">备注</label>
+                                <input type="text" name="remark" class="form-control">
+                            </div>
+                            <button type="button" class="btn btn-info w-100" onclick="inlineFetchModels('add')">
+                                <span id="addFetchBtnText">🚀 拉取模型列表</span>
+                            </button>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label d-flex justify-content-between">
+                                    <span>模型列表</span>
+                                    <span id="addModelCount" class="text-muted">0 个模型</span>
+                                </label>
+                                <div class="d-flex gap-2 mb-2">
+                                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="toggleAllModels('add', true)">全选</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAllModels('add', false)">取消全选</button>
+                                </div>
+                                <div id="addModelList" class="border rounded p-2" style="max-height: 400px; overflow-y: auto;">
+                                    <p class="text-muted text-center mb-0 py-4">请先填写 URL 和 API Key，然后点击「拉取模型列表」</p>
+                                </div>
+                                <input type="hidden" name="models_json" id="addModelsJson" value="[]">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存中转站</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ========== Edit Modal ========== -->
+<div class="modal fade" id="editModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <form method="post" action="/ui/providers/edit/" id="editForm" onsubmit="buildEditForm()">
+                <div class="modal-header">
+                    <h5 class="modal-title">编辑中转站</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">名称</label>
+                                <input type="text" name="name" id="editName" class="form-control" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">URL</label>
+                                <input type="url" name="url" id="editUrl" class="form-control" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">服务类型</label>
+                                <select name="service_type" id="editServiceType" class="form-control">
+                                    <option value="openai">OpenAI Chat</option>
+                                    <option value="openai_responses">OpenAI Responses</option>
+                                    <option value="anthropic">Anthropic</option>
+                                    <option value="gemini">Gemini</option>
+                                    <option value="deepseek">DeepSeek</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">API Keys</label>
+                                <div id="editApiKeysContainer"></div>
+                                <button type="button" class="btn btn-sm btn-outline-success mt-1" onclick="addKeyItem('editApiKeysContainer')">+ 添加 Key</button>
+                                <input type="hidden" name="api_keys_json" id="editApiKeysJson" value="[]">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">备注</label>
+                                <input type="text" name="remark" id="editRemark" class="form-control">
+                            </div>
+                            <button type="button" class="btn btn-info w-100" onclick="inlineFetchModels('edit')">
+                                <span id="editFetchBtnText">🚀 拉取模型列表</span>
+                            </button>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label d-flex justify-content-between">
+                                    <span>模型列表</span>
+                                    <span id="editModelCount" class="text-muted">0 个模型</span>
+                                </label>
+                                <div class="d-flex gap-2 mb-2">
+                                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="toggleAllModels('edit', true)">全选</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAllModels('edit', false)">取消全选</button>
+                                </div>
+                                <div id="editModelList" class="border rounded p-2" style="max-height: 400px; overflow-y: auto;">
+                                    <p class="text-muted text-center mb-0 py-4">请先填写 URL 和 API Key，然后点击「拉取模型列表」</p>
+                                </div>
+                                <input type="hidden" name="models_json" id="editModelsJson" value="[]">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">保存修改</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

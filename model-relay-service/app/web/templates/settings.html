@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}系统设置{% endblock %}
+{% block content %}
+<h2 class="mb-3">系统设置</h2>
+
+<div class="card" style="max-width: 600px;">
+    <div class="card-body">
+        <form method="post" action="/ui/settings/update">
+            <div class="mb-3">
+                <label class="form-label">测试间隔（秒）</label>
+                <input type="number" name="test_interval_seconds" class="form-control"
+                       value="{{ settings.test_interval_seconds }}" min="10" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">请求超时（秒）</label>
+                <input type="number" name="request_timeout_seconds" class="form-control"
+                       value="{{ settings.request_timeout_seconds }}" min="5" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">最大并发数</label>
+                <input type="number" name="max_workers" class="form-control"
+                       value="{{ settings.max_workers }}" min="1" max="20" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">测试提示语</label>
+                <textarea name="test_prompt" class="form-control" rows="2">{{ settings.test_prompt }}</textarea>
+                <small class="text-muted">定时测试 / 手动测试时向模型发送的请求内容</small>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">竞速超时（秒）</label>
+                <input type="number" name="race_timeout_seconds" class="form-control"
+                       value="{{ settings.race_timeout_seconds }}" min="0" required>
+                <small class="text-muted">首个中转站超过此时间未返回时，同时请求所有其他包含同名模型的中转站，取最快结果。设为 0 禁用竞速。</small>
+            </div>
+            <button type="submit" class="btn btn-primary">保存设置</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

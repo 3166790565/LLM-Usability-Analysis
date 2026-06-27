@@ -1,0 +1,33 @@
+body {
+    font-size: 14px;
+}
+
+.table td, .table th {
+    vertical-align: middle;
+}
+
+code {
+    font-size: 0.9em;
+}
+
+.navbar-brand {
+    font-weight: 600;
+}
+
+.card-header {
+    font-weight: 500;
+}
+
+.table-success td:last-child {
+    color: #198754;
+    font-weight: 500;
+}
+
+.table-danger td:last-child {
+    color: #dc3545;
+    font-weight: 500;
+}
+
+.badge {
+    font-size: 0.85em;
+}

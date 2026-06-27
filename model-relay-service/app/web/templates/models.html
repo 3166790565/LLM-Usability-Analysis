@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}模型管理{% endblock %}
+{% block content %}
+<h2 class="mb-3">模型管理</h2>
+<p class="text-muted">所有中转站中已启用的模型列表。可在此编辑别名、对单个模型执行测试。保存后，模型将更新其启用状态和别名。</p>
+
+{% for group in provider_groups %}
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>{{ group.provider_name }}</strong>
+        <button class="btn btn-sm btn-info" onclick="fetchModels('{{ group.provider_id }}')">从上游拉取模型</button>
+    </div>
+    <div class="card-body">
+        <form method="post" action="/ui/models/update/{{ group.provider_id }}">
+            <div class="mb-2">
+                <label class="form-label">已添加的模型</label>
+                <div class="d-flex gap-2 mb-2">
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="toggleAllModelsInGroup('chk_{{ group.provider_id }}', true)">全选</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAllModelsInGroup('chk_{{ group.provider_id }}', false)">取消全选</button>
+                </div>
+            </div>
+            <div class="row">
+                {% for m in group.models %}
+                {% if m.enabled %}
+                <div class="col-md-6 mb-2">
+                    <div class="border rounded p-2 d-flex align-items-center gap-2">
+                        <input class="form-check-input model-checkbox" type="checkbox" name="enabled" value="{{ m.id }}"
+                               id="chk_{{ group.provider_id }}_{{ loop.index }}"
+                               {% if m.enabled %}checked{% endif %}>
+                        <div class="flex-grow-1">
+                            <label class="form-check-label d-block" for="chk_{{ group.provider_id }}_{{ loop.index }}">
+                                <code>{{ m.id }}</code>
+                            </label>
+                            <input type="text" class="form-control form-control-sm mt-1" style="max-width:280px"
+                                   name="alias_{{ m.id }}"
+                                   placeholder="可选别名"
+                                   value="{{ m.alias or '' }}">
+                        </div>
+                        <div class="flex-shrink-0">
+                            <button type="button" class="btn btn-sm btn-outline-success"
+                                    onclick="testSingleModel('{{ group.provider_id }}', '{{ m.id }}')"
+                                    title="测试此模型">
+                                ▶ 测试
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+            </div>
+            <button type="submit" class="btn btn-primary mt-2">保存模型配置</button>
+        </form>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">暂无已添加的模型，请在「中转站」页面添加中转站并拉取模型。</div>
+{% endfor %}
+
+<!-- 单模型测试结果弹窗 -->
+<div class="modal fade" id="testResultModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">测试结果：<span id="testResultModelName"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="testResultBody">
+                <div id="testResultLoading" class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status"></div>
+                    <p class="mt-2">测试中...</p>
+                </div>
+                <div id="testResultContent" style="display:none"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
