@@ -63,75 +63,75 @@ class TesterService:
             self._running = True
             self._notify_status(True)
             logger.info("开始执行所有模型测试")
+            try:
+                providers = self.providers_mgr.get_all_providers()
+                timeout = self.settings_mgr.get("request_timeout_seconds", 30)
+                max_workers = self.settings_mgr.get("max_workers", 5)
+                test_prompt = self.settings_mgr.get("test_prompt", "say hello in world")
 
-            providers = self.providers_mgr.get_all_providers()
-            timeout = self.settings_mgr.get("request_timeout_seconds", 30)
-            max_workers = self.settings_mgr.get("max_workers", 5)
-            test_prompt = self.settings_mgr.get("test_prompt", "say hello in world")
+                async def test_provider(provider):
+                    results = []
+                    for model_cfg in provider.get("models", []):
+                        if not model_cfg.get("enabled", False):
+                            continue
+                        model_id = model_cfg["id"]
+                        alias = self.providers_mgr.get_alias(model_id) or model_id
 
-            async def test_provider(provider):
-                results = []
-                for model_cfg in provider.get("models", []):
-                    if not model_cfg.get("enabled", False):
-                        continue
-                    model_id = model_cfg["id"]
-                    alias = self.providers_mgr.get_alias(model_id) or model_id
-
-                    for key_info in provider.get("api_keys", []):
-                        client = ProviderClient(provider["url"], key_info["key"], timeout,
-                                                 service_type=provider.get("service_type", "openai"))
-                        latency, error, request_body, response_body = await client.test_model(model_id, test_prompt)
-                        success = error is None
-                        results.append({
-                            "provider_id": provider["id"],
-                            "provider_name": provider["name"],
-                            "model_id": model_id,
-                            "alias_name": alias,
-                            "key_id": key_info["id"],
-                            "latency_ms": latency,
-                            "success": 1 if success else 0,
-                            "error_message": error,
-                            "request_body": request_body,
-                            "response_body": response_body,
-                            "tested_at": datetime.now().isoformat()
-                        })
-                        logger.info(
-                            f"测试完成: {provider['name']}/{model_id} "
-                            f"key={key_info['id']} 延迟={latency:.0f}ms "
-                            f"{'✓' if success else '✗'}"
-                        )
-                return results
-
-            # 使用 asyncio.gather 并行测试不同中转站
-            sem = asyncio.Semaphore(max_workers)
-
-            async def bounded_test(provider):
-                async with sem:
-                    return await test_provider(provider)
-
-            tasks = [bounded_test(p) for p in providers]
-            all_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # 保存到 SQLite — 先清空旧结果，再写入本次新结果
-            async with get_db() as db:
-                await db.execute("DELETE FROM test_results")
-                for result_group in all_results:
-                    if isinstance(result_group, list):
-                        for r in result_group:
-                            await db.execute(
-                                """INSERT INTO test_results
-                                (provider_id, provider_name, model_id, alias_name, key_id, latency_ms, success, error_message, request_body, response_body, tested_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                                (r["provider_id"], r["provider_name"], r["model_id"],
-                                 r["alias_name"], r["key_id"], r["latency_ms"],
-                                 r["success"], r["error_message"],
-                                 r["request_body"], r["response_body"],
-                                 r["tested_at"])
+                        for key_info in provider.get("api_keys", []):
+                            client = ProviderClient(provider["url"], key_info["key"], timeout,
+                                                     service_type=provider.get("service_type", "openai"))
+                            latency, error, request_body, response_body = await client.test_model(model_id, test_prompt)
+                            success = error is None
+                            results.append({
+                                "provider_id": provider["id"],
+                                "provider_name": provider["name"],
+                                "model_id": model_id,
+                                "alias_name": alias,
+                                "key_id": key_info["id"],
+                                "latency_ms": latency,
+                                "success": 1 if success else 0,
+                                "error_message": error,
+                                "request_body": request_body,
+                                "response_body": response_body,
+                                "tested_at": datetime.now().isoformat()
+                            })
+                            logger.info(
+                                f"测试完成: {provider['name']}/{model_id} "
+                                f"key={key_info['id']} 延迟={latency:.0f}ms "
+                                f"{'✓' if success else '✗'}"
                             )
-                await db.commit()
+                    return results
 
-            self._running = False
-            self._notify_status(False)
+                # 使用 asyncio.gather 并行测试不同中转站
+                sem = asyncio.Semaphore(max_workers)
+
+                async def bounded_test(provider):
+                    async with sem:
+                        return await test_provider(provider)
+
+                tasks = [bounded_test(p) for p in providers]
+                all_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # 保存到 SQLite — 先清空旧结果，再写入本次新结果
+                async with get_db() as db:
+                    await db.execute("DELETE FROM test_results")
+                    for result_group in all_results:
+                        if isinstance(result_group, list):
+                            for r in result_group:
+                                await db.execute(
+                                    """INSERT INTO test_results
+                                    (provider_id, provider_name, model_id, alias_name, key_id, latency_ms, success, error_message, request_body, response_body, tested_at)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                    (r["provider_id"], r["provider_name"], r["model_id"],
+                                     r["alias_name"], r["key_id"], r["latency_ms"],
+                                     r["success"], r["error_message"],
+                                     r["request_body"], r["response_body"],
+                                     r["tested_at"])
+                                )
+                    await db.commit()
+            finally:
+                self._running = False
+                self._notify_status(False)
             logger.info("所有模型测试完成")
 
     def _notify_status(self, running: bool):
