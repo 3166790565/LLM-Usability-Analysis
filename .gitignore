@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 运行时数据（每台服务器各自的配置，不要上传）
+runtime/
+
+# 环境变量
+.env
+
+# IDE
+.vscode/
+.idea/
+.trae/
+
+# 系统
+Thumbs.db
+.DS_Store
+
+docs/
+model-relay-service/.gitignore
