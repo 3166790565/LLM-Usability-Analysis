@@ -3,37 +3,403 @@
 {% block content %}
 <h2 class="mb-3">系统设置</h2>
 
-<div class="card" style="max-width: 600px;">
-    <div class="card-body">
-        <form method="post" action="/ui/settings/update">
-            <div class="mb-3">
-                <label class="form-label">测试间隔（秒）</label>
-                <input type="number" name="test_interval_seconds" class="form-control"
-                       value="{{ settings.test_interval_seconds }}" min="10" required>
+<div class="row">
+    <!-- 基础设置 -->
+    <div class="col-md-6 mb-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">基础设置</h5>
+                <form method="post" action="/ui/settings/update">
+                    <div class="mb-3">
+                        <label class="form-label">测试间隔（秒）</label>
+                        <input type="number" name="test_interval_seconds" class="form-control"
+                               value="{{ settings.test_interval_seconds }}" min="10" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">请求超时（秒）</label>
+                        <input type="number" name="request_timeout_seconds" class="form-control"
+                               value="{{ settings.request_timeout_seconds }}" min="5" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">最大并发数</label>
+                        <input type="number" name="max_workers" class="form-control"
+                               value="{{ settings.max_workers }}" min="1" max="20" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">测试提示语</label>
+                        <textarea name="test_prompt" class="form-control" rows="2">{{ settings.test_prompt }}</textarea>
+                        <small class="text-muted">定时测试 / 手动测试时向模型发送的请求内容</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">竞速超时（秒）</label>
+                        <input type="number" name="race_timeout_seconds" class="form-control"
+                               value="{{ settings.race_timeout_seconds }}" min="0" required>
+                        <small class="text-muted">首个中转站超过此时间未返回时，同时请求所有其他包含同名模型的中转站，取最快结果。设为 0 禁用竞速。</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary">保存设置</button>
+                </form>
             </div>
-            <div class="mb-3">
-                <label class="form-label">请求超时（秒）</label>
-                <input type="number" name="request_timeout_seconds" class="form-control"
-                       value="{{ settings.request_timeout_seconds }}" min="5" required>
+        </div>
+    </div>
+
+    <!-- 兜底机制设置 -->
+    <div class="col-md-6 mb-3">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">兜底机制</h5>
+                <p class="text-muted small">
+                    当所有已配置的中转站均无法响应请求时，系统将自动切换至官方渠道进行兜底请求，
+                    确保服务的连续性和可用性。您需要先为各模型分别配置官方渠道信息才能生效。
+                </p>
+
+                <div class="d-flex align-items-center mb-3">
+                    <div class="form-check form-switch me-2">
+                        <input class="form-check-input" type="checkbox" id="fallbackToggle"
+                               {% if fallback_config.enabled %}checked{% endif %}
+                               onchange="toggleFallback(this.checked)">
+                        <label class="form-check-label" for="fallbackToggle">
+                            {% if fallback_config.enabled %}
+                            <span class="text-success fw-bold">已启用</span>
+                            {% else %}
+                            <span class="text-secondary">已禁用</span>
+                            {% endif %}
+                        </label>
+                    </div>
+                    <span id="fallbackToggleSpinner" class="spinner-border spinner-border-sm d-none" role="status"></span>
+                </div>
+
+                <div id="fallbackStatusInfo" class="alert {% if fallback_config.enabled %}alert-success{% else %}alert-secondary{% endif %} small mb-3">
+                    {% if fallback_config.enabled %}
+                    <i class="bi bi-check-circle"></i> 兜底机制已启用，系统将在所有主渠道失效时自动切换至已配置的官方渠道。
+                    {% else %}
+                    <i class="bi bi-info-circle"></i> 兜底机制当前已禁用。启用后，请为下方各模型分别配置官方兜底渠道。
+                    {% endif %}
+                </div>
+
+                <hr>
+
+                <h6>模型兜底渠道配置</h6>
+                <p class="text-muted small">以下为所有中转站中已启用的模型列表（已去重）。点击「配置」为对应模型设置官方兜底渠道。</p>
+
+                {% if all_models and all_models|length > 0 %}
+                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                    <table class="table table-sm table-hover" id="fallbackChannelTable">
+                        <thead>
+                            <tr>
+                                <th>模型 ID</th>
+                                <th>兜底状态</th>
+                                <th>端点</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for model_id in all_models %}
+                            {% set channel = fallback_config.channels.get(model_id) %}
+                            <tr id="fb-row-{{ model_id | replace('.', '-') | replace('/', '-') }}">
+                                <td><code>{{ model_id }}</code></td>
+                                <td>
+                                    {% if channel %}
+                                    <span class="badge bg-success">已配置</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">未配置</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if channel %}
+                                    <small class="text-muted">{{ channel.api_endpoint }}</small>
+                                    {% else %}
+                                    <small class="text-muted">-</small>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <button type="button" class="btn btn-sm btn-outline-primary"
+                                            onclick="openFallbackConfig('{{ model_id }}')">
+                                        {% if channel %}编辑{% else %}配置{% endif %}
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-info small mb-0">
+                    暂无可配置的模型。请先在「中转站」页面添加中转站并拉取模型。
+                </div>
+                {% endif %}
             </div>
-            <div class="mb-3">
-                <label class="form-label">最大并发数</label>
-                <input type="number" name="max_workers" class="form-control"
-                       value="{{ settings.max_workers }}" min="1" max="20" required>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">测试提示语</label>
-                <textarea name="test_prompt" class="form-control" rows="2">{{ settings.test_prompt }}</textarea>
-                <small class="text-muted">定时测试 / 手动测试时向模型发送的请求内容</small>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">竞速超时（秒）</label>
-                <input type="number" name="race_timeout_seconds" class="form-control"
-                       value="{{ settings.race_timeout_seconds }}" min="0" required>
-                <small class="text-muted">首个中转站超过此时间未返回时，同时请求所有其他包含同名模型的中转站，取最快结果。设为 0 禁用竞速。</small>
-            </div>
-            <button type="submit" class="btn btn-primary">保存设置</button>
-        </form>
+        </div>
     </div>
 </div>
+
+<!-- 兜底渠道配置弹窗 -->
+<div class="modal fade" id="fallbackConfigModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">配置兜底渠道：<span id="fbModalModelName"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info small">
+                    配置官方 API 渠道作为兜底。当所有中转站均无法响应时，系统将自动使用此渠道发起请求。
+                </div>
+                <form id="fallbackChannelForm">
+                    <input type="hidden" id="fbModelAlias" name="model_alias">
+                    <input type="hidden" id="fbRealModelId" name="real_model_id">
+
+                    <div class="mb-3">
+                        <label class="form-label">API Key <span class="text-danger">*</span></label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="fbApiKey" name="api_key"
+                                   placeholder="输入官方 API Key" required>
+                            <button type="button" class="btn btn-outline-secondary" onclick="toggleApiKeyVisibility('fbApiKey', this)">
+                                👁
+                            </button>
+                        </div>
+                        <small class="text-muted">该 Key 将以加密方式存储，不会明文显示</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">API 端点 URL <span class="text-danger">*</span></label>
+                        <input type="url" class="form-control" id="fbApiEndpoint" name="api_endpoint"
+                               placeholder="https://api.openai.com" required>
+                        <small class="text-muted">官方 API 的基础 URL</small>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">服务类型</label>
+                        <select class="form-select" id="fbServiceType" name="service_type">
+                            <option value="openai">OpenAI Chat Completions</option>
+                            <option value="openai_responses">OpenAI Responses</option>
+                            <option value="anthropic">Anthropic Messages</option>
+                            <option value="deepseek">DeepSeek</option>
+                            <option value="gemini">Gemini</option>
+                        </select>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label">超时时间（秒）</label>
+                            <input type="number" class="form-control" id="fbTimeout" name="timeout_seconds"
+                                   value="30" min="5" max="120">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">最大重试次数</label>
+                            <input type="number" class="form-control" id="fbMaxRetries" name="max_retries"
+                                   value="2" min="0" max="5">
+                        </div>
+                    </div>
+                </form>
+                <div id="fbValidationError" class="alert alert-danger small d-none"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-danger" id="fbDeleteBtn" onclick="deleteFallbackChannel()"
+                        style="display:none">删除此渠道</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveFallbackChannel()">保存配置</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ======== 兜底渠道配置 ========
+
+let _fallbackChannels = {};
+
+// 页面加载时获取所有兜底渠道配置
+document.addEventListener('DOMContentLoaded', async function() {
+    try {
+        const resp = await fetch('/ui/fallback/channels');
+        const data = await resp.json();
+        _fallbackChannels = data.channels || {};
+    } catch (e) {
+        console.warn('获取兜底渠道配置失败:', e);
+    }
+});
+
+function openFallbackConfig(modelId) {
+    document.getElementById('fbModalModelName').textContent = modelId;
+    document.getElementById('fbModelAlias').value = modelId;
+    document.getElementById('fbRealModelId').value = modelId;
+    document.getElementById('fbValidationError').classList.add('d-none');
+
+    // 检查是否已有配置
+    const existing = _fallbackChannels[modelId];
+    const deleteBtn = document.getElementById('fbDeleteBtn');
+
+    if (existing) {
+        document.getElementById('fbApiKey').value = '';
+        document.getElementById('fbApiKey').placeholder = '已配置（留空则不修改）';
+        document.getElementById('fbApiEndpoint').value = existing.api_endpoint || '';
+        document.getElementById('fbServiceType').value = existing.service_type || 'openai';
+        document.getElementById('fbTimeout').value = existing.timeout_seconds || 30;
+        document.getElementById('fbMaxRetries').value = existing.max_retries || 2;
+        deleteBtn.style.display = 'inline-block';
+    } else {
+        document.getElementById('fbApiKey').value = '';
+        document.getElementById('fbApiKey').placeholder = '输入官方 API Key';
+        document.getElementById('fbApiEndpoint').value = '';
+        document.getElementById('fbServiceType').value = 'openai';
+        document.getElementById('fbTimeout').value = 30;
+        document.getElementById('fbMaxRetries').value = 2;
+        deleteBtn.style.display = 'none';
+    }
+
+    var modal = new bootstrap.Modal(document.getElementById('fallbackConfigModal'));
+    modal.show();
+}
+
+async function saveFallbackChannel() {
+    const form = document.getElementById('fallbackChannelForm');
+    const formData = new FormData(form);
+    const errorDiv = document.getElementById('fbValidationError');
+    const modelId = document.getElementById('fbModelAlias').value;
+
+    // 基本校验
+    const apiKey = formData.get('api_key').trim();
+    const apiEndpoint = formData.get('api_endpoint').trim();
+    if (!apiKey && !document.getElementById('fbApiKey').placeholder.includes('已配置')) {
+        errorDiv.textContent = '请输入 API Key';
+        errorDiv.classList.remove('d-none');
+        return;
+    }
+    if (!apiEndpoint) {
+        errorDiv.textContent = '请输入 API 端点 URL';
+        errorDiv.classList.remove('d-none');
+        return;
+    }
+
+    errorDiv.classList.add('d-none');
+
+    try {
+        const resp = await fetch('/ui/fallback/channel', { method: 'POST', body: formData });
+        if (!resp.ok) {
+            const errData = await resp.json();
+            errorDiv.textContent = errData.detail || '保存失败';
+            errorDiv.classList.remove('d-none');
+            return;
+        }
+        const data = await resp.json();
+        if (data.success) {
+            // 刷新渠道列表
+            const channelsResp = await fetch('/ui/fallback/channels');
+            const channelsData = await channelsResp.json();
+            _fallbackChannels = channelsData.channels || {};
+
+            var modal = bootstrap.Modal.getInstance(document.getElementById('fallbackConfigModal'));
+            modal.hide();
+            updateChannelTableRow(modelId);
+            alert('兜底渠道配置已保存');
+        }
+    } catch (e) {
+        errorDiv.textContent = '保存失败: ' + e.message;
+        errorDiv.classList.remove('d-none');
+    }
+}
+
+// 保存成功后刷新表格行状态
+function updateChannelTableRow(modelId) {
+    const safeId = 'fb-row-' + modelId.replace(/\./g, '-').replace(/\//g, '-');
+    const row = document.getElementById(safeId);
+    if (!row) {
+        location.reload();
+        return;
+    }
+    const channel = _fallbackChannels[modelId];
+    const statusCell = row.querySelector('td:nth-child(2)');
+    const endpointCell = row.querySelector('td:nth-child(3)');
+    const actionCell = row.querySelector('td:nth-child(4)');
+
+    if (channel) {
+        statusCell.innerHTML = '<span class="badge bg-success">已配置</span>';
+        endpointCell.innerHTML = '<small class="text-muted">' + escapeHtml(channel.api_endpoint) + '</small>';
+        actionCell.innerHTML = '<button type="button" class="btn btn-sm btn-outline-primary" onclick="openFallbackConfig(\'' + escapeHtmlAttr(modelId) + '\')">编辑</button>';
+    } else {
+        statusCell.innerHTML = '<span class="badge bg-secondary">未配置</span>';
+        endpointCell.innerHTML = '<small class="text-muted">-</small>';
+        actionCell.innerHTML = '<button type="button" class="btn btn-sm btn-outline-primary" onclick="openFallbackConfig(\'' + escapeHtmlAttr(modelId) + '\')">配置</button>';
+    }
+}
+
+async function deleteFallbackChannel() {
+    const modelId = document.getElementById('fbModelAlias').value;
+    if (!confirm('确定删除模型 "' + modelId + '" 的兜底渠道配置吗？')) return;
+
+    try {
+        const resp = await fetch('/ui/fallback/channel/' + encodeURIComponent(modelId), { method: 'DELETE' });
+        if (!resp.ok) {
+            alert('删除失败');
+            return;
+        }
+        const data = await resp.json();
+        if (data.success) {
+            delete _fallbackChannels[modelId];
+            var modal = bootstrap.Modal.getInstance(document.getElementById('fallbackConfigModal'));
+            modal.hide();
+            updateChannelTableRow(modelId);
+            alert('兜底渠道已删除');
+        }
+    } catch (e) {
+        alert('删除失败: ' + e.message);
+    }
+}
+
+function toggleApiKeyVisibility(inputId, btn) {
+    const input = document.getElementById(inputId);
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = '🙈';
+    } else {
+        input.type = 'password';
+        btn.textContent = '👁';
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function escapeHtmlAttr(text) {
+    if (!text) return '';
+    return String(text).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ======== 全局兜底开关 ========
+
+async function toggleFallback(enabled) {
+    const spinner = document.getElementById('fallbackToggleSpinner');
+    const statusInfo = document.getElementById('fallbackStatusInfo');
+    const toggleLabel = document.querySelector('label[for="fallbackToggle"]');
+
+    spinner.classList.remove('d-none');
+
+    try {
+        const formData = new FormData();
+        formData.append('enabled', enabled ? 'true' : 'false');
+        const resp = await fetch('/ui/fallback/toggle', { method: 'POST', body: formData });
+        const data = await resp.json();
+        if (data.success) {
+            if (enabled) {
+                statusInfo.className = 'alert alert-success small mb-3';
+                statusInfo.innerHTML = '<i class="bi bi-check-circle"></i> 兜底机制已启用，系统将在所有主渠道失效时自动切换至已配置的官方渠道。';
+                toggleLabel.innerHTML = '<span class="text-success fw-bold">已启用</span>';
+            } else {
+                statusInfo.className = 'alert alert-secondary small mb-3';
+                statusInfo.innerHTML = '<i class="bi bi-info-circle"></i> 兜底机制当前已禁用。启用后，请为下方各模型分别配置官方兜底渠道。';
+                toggleLabel.innerHTML = '<span class="text-secondary">已禁用</span>';
+            }
+        }
+    } catch (e) {
+        alert('切换失败: ' + e.message);
+        document.getElementById('fallbackToggle').checked = !enabled;
+    } finally {
+        spinner.classList.add('d-none');
+    }
+}
+</script>
 {% endblock %}

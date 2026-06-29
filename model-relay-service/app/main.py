@@ -10,8 +10,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.config.providers import ProvidersManager
 from app.config.settings import SettingsManager
+from app.config.fallback import FallbackManager
 from app.services.tester import TesterService
 from app.services.router import RouterService
+from app.services.fallback_handler import FallbackHandler
 from app.models.database import init_db
 from app.web.routes_api import router as api_router, init as init_api
 from app.web.routes_ui import router as ui_router, init as init_ui
@@ -25,8 +27,10 @@ logger = logging.getLogger(__name__)
 # 全局实例
 providers_mgr = ProvidersManager()
 settings_mgr = SettingsManager()
+fallback_mgr = FallbackManager()
 tester = TesterService(providers_mgr, settings_mgr)
 router_svc = RouterService(providers_mgr, settings_mgr)
+fallback_handler = FallbackHandler(fallback_mgr)
 
 
 @asynccontextmanager
@@ -54,8 +58,8 @@ if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # 初始化路由依赖
-init_api(router_svc, providers_mgr, settings_mgr)
-init_ui(providers_mgr, settings_mgr, tester)
+init_api(router_svc, providers_mgr, settings_mgr, fallback_handler)
+init_ui(providers_mgr, settings_mgr, tester, fallback_mgr)
 
 # 注册路由
 app.include_router(api_router)

@@ -8,6 +8,7 @@ import socket as _socket
 
 from app.config.providers import ProvidersManager
 from app.config.settings import SettingsManager
+from app.config.fallback import FallbackManager
 from app.services.tester import TesterService
 from app.models.database import get_db
 
@@ -21,17 +22,20 @@ templates = Jinja2Templates(
 _providers_mgr: ProvidersManager = None
 _settings_mgr: SettingsManager = None
 _tester: TesterService = None
+_fallback_mgr: FallbackManager = None
 
 
 def init(
     providers_mgr: ProvidersManager,
     settings_mgr: SettingsManager,
-    tester: TesterService
+    tester: TesterService,
+    fallback_mgr: FallbackManager = None
 ):
-    global _providers_mgr, _settings_mgr, _tester
+    global _providers_mgr, _settings_mgr, _tester, _fallback_mgr
     _providers_mgr = providers_mgr
     _settings_mgr = settings_mgr
     _tester = tester
+    _fallback_mgr = fallback_mgr
 
 
 # --- Provider Management ---
@@ -437,9 +441,26 @@ async def history_page(request: Request, page: int = 1, model: str = ""):
 @router.get("/ui/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     settings = _settings_mgr.get_all()
+    fallback_config = {"enabled": False, "channels": {}}
+    if _fallback_mgr:
+        fallback_config = _fallback_mgr.get_all_config()
+
+    # 获取所有去重后的模型 ID（所有中转站中已启用的模型）
+    all_models = set()
+    for p in _providers_mgr.get_all_providers():
+        for m in p.get("models", []):
+            if m.get("enabled", False):
+                all_models.add(m["id"])
+    all_models = sorted(all_models)
+
     return templates.TemplateResponse(
         "settings.html",
-        {"request": request, "settings": settings}
+        {
+            "request": request,
+            "settings": settings,
+            "fallback_config": fallback_config,
+            "all_models": all_models
+        }
     )
 
 
@@ -461,6 +482,93 @@ async def update_settings(
     if _tester:
         await _tester.restart_scheduler()
     return RedirectResponse(url="/ui/settings", status_code=303)
+
+
+# ========== 兜底机制 API ==========
+
+
+@router.get("/ui/fallback/config")
+async def get_fallback_config():
+    """获取兜底机制完整配置"""
+    if not _fallback_mgr:
+        return JSONResponse({"enabled": False, "channels": {}})
+    return JSONResponse(_fallback_mgr.get_all_config())
+
+
+@router.post("/ui/fallback/toggle")
+async def toggle_fallback(enabled: bool = Form(...)):
+    """启用/禁用兜底机制"""
+    if not _fallback_mgr:
+        raise HTTPException(status_code=400, detail="兜底机制未初始化")
+    _fallback_mgr.set_enabled(enabled)
+    return JSONResponse({"success": True, "enabled": enabled})
+
+
+@router.post("/ui/fallback/channel")
+async def upsert_fallback_channel(request: Request):
+    """设置/更新指定模型的兜底渠道"""
+    if not _fallback_mgr:
+        raise HTTPException(status_code=400, detail="兜底机制未初始化")
+    form = await request.form()
+    model_alias = form.get("model_alias", "").strip()
+    if not model_alias:
+        raise HTTPException(status_code=400, detail="模型别名不能为空")
+
+    api_key = form.get("api_key", "").strip()
+    api_endpoint = form.get("api_endpoint", "").strip()
+    service_type = form.get("service_type", "openai").strip()
+    timeout_seconds = int(form.get("timeout_seconds", 30))
+    max_retries = int(form.get("max_retries", 2))
+    real_model_id = form.get("real_model_id", model_alias).strip()
+
+    # 校验 API Key 格式
+    valid, msg = _fallback_mgr.validate_api_key_format(api_key, service_type)
+    if not valid:
+        raise HTTPException(status_code=400, detail=msg)
+
+    if not api_endpoint:
+        raise HTTPException(status_code=400, detail="API 端点 URL 不能为空")
+
+    channel_config = {
+        "api_key": api_key,
+        "api_endpoint": api_endpoint,
+        "service_type": service_type,
+        "timeout_seconds": timeout_seconds,
+        "max_retries": max_retries,
+        "real_model_id": real_model_id
+    }
+    _fallback_mgr.set_channel(model_alias, channel_config)
+    return JSONResponse({"success": True, "model_alias": model_alias})
+
+
+@router.delete("/ui/fallback/channel/{model_alias}")
+async def delete_fallback_channel(model_alias: str):
+    """删除指定模型的兜底渠道"""
+    if not _fallback_mgr:
+        raise HTTPException(status_code=400, detail="兜底机制未初始化")
+    result = _fallback_mgr.remove_channel(model_alias)
+    if not result:
+        raise HTTPException(status_code=404, detail="兜底渠道不存在")
+    return JSONResponse({"success": True})
+
+
+@router.get("/ui/fallback/channels")
+async def get_fallback_channels():
+    """获取所有兜底渠道（设置页面使用）"""
+    if not _fallback_mgr:
+        return JSONResponse({"channels": {}})
+    return JSONResponse({"channels": _fallback_mgr.get_all_channels()})
+
+
+@router.get("/ui/fallback/models")
+async def get_fallback_models():
+    """获取所有去重后的模型 ID 列表（设置页面使用）"""
+    all_models = set()
+    for p in _providers_mgr.get_all_providers():
+        for m in p.get("models", []):
+            if m.get("enabled", False):
+                all_models.add(m["id"])
+    return JSONResponse({"models": sorted(all_models)})
 
 
 def _get_local_ip() -> str:

@@ -11,6 +11,7 @@ from app.models.schemas import (
 )
 from app.services.router import RouterService
 from app.services.provider_client import ProviderClient
+from app.services.fallback_handler import FallbackHandler
 from app.config.providers import ProvidersManager
 from app.config.settings import SettingsManager
 
@@ -20,17 +21,20 @@ router = APIRouter()
 _router_service: RouterService = None
 _providers_mgr: ProvidersManager = None
 _settings_mgr: SettingsManager = None
+_fallback_handler: FallbackHandler = None
 
 
 def init(
     router_service: RouterService,
     providers_mgr: ProvidersManager,
-    settings_mgr: SettingsManager
+    settings_mgr: SettingsManager,
+    fallback_handler: FallbackHandler = None
 ):
-    global _router_service, _providers_mgr, _settings_mgr
+    global _router_service, _providers_mgr, _settings_mgr, _fallback_handler
     _router_service = router_service
     _providers_mgr = providers_mgr
     _settings_mgr = settings_mgr
+    _fallback_handler = fallback_handler
 
 
 # ========== 辅助函数 ==========
@@ -41,35 +45,51 @@ async def _forward_request(
     stream: bool = False,
     extra_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Any:
-    """通用转发逻辑：解析别名 → 竞速模式调用上游"""
+    """通用转发逻辑：解析别名 → 竞速模式调用上游 → 兜底机制"""
     kwargs = dict(extra_kwargs or {})
 
-    # 流式请求使用顺序故障转移
-    if stream:
-        combos = await _router_service.get_all_combos_for_model(model_alias)
-        if not combos:
-            raise HTTPException(status_code=503, detail=f"模型 {model_alias} 当前无可用中转站")
-
-        # 过滤掉上一次自动测试失败的组合
-        available_combos = [c for c in combos if not c.get("is_failed", False)]
-        if not available_combos:
-            # 全部标记为失败时仍然尝试（可能是暂时性故障）
-            available_combos = combos
-
-        return StreamingResponse(
-            _stream_with_failover(available_combos, messages, kwargs),
-            media_type="text/event-stream"
-        )
-
-    # --- 非流式请求：竞速模式 ---
+    # 获取所有可用组合
     combos = await _router_service.get_all_combos_for_model(model_alias)
-    if not combos:
-        raise HTTPException(status_code=503, detail=f"模型 {model_alias} 当前无可用中转站")
 
     # 过滤掉上一次自动测试失败的组合
     available_combos = [c for c in combos if not c.get("is_failed", False)]
     if not available_combos:
         available_combos = combos
+
+    # --- 流式请求 ---
+    if stream:
+        if available_combos:
+            return StreamingResponse(
+                _stream_with_failover(model_alias, available_combos, messages, kwargs),
+                media_type="text/event-stream"
+            )
+
+        # 无可用中转站，尝试兜底
+        if _fallback_handler:
+            fallback_gen = await _fallback_handler.execute_fallback_stream(
+                model_alias, messages, kwargs
+            )
+            if fallback_gen:
+                logger.info(f"兜底机制生效: 模型={model_alias} (无可用中转站)")
+                return StreamingResponse(
+                    fallback_gen,
+                    media_type="text/event-stream"
+                )
+
+        raise HTTPException(status_code=503, detail=f"模型 {model_alias} 当前无可用中转站")
+
+    # --- 非流式请求：竞速模式 ---
+    if not available_combos:
+        # 无可用中转站，直接尝试兜底
+        if _fallback_handler:
+            fallback_data = await _fallback_handler.execute_fallback(
+                model_alias, messages, stream=False, extra_kwargs=kwargs
+            )
+            if fallback_data:
+                logger.info(f"兜底机制生效: 模型={model_alias} (无可用中转站)")
+                return JSONResponse(content=fallback_data["result"])
+
+        raise HTTPException(status_code=503, detail=f"模型 {model_alias} 当前无可用中转站")
 
     race_timeout = _settings_mgr.get("race_timeout_seconds", 0)
 
@@ -103,6 +123,14 @@ async def _forward_request(
 
     # 首个失败 → 竞速所有可用组合
     if len(available_combos) == 1:
+        # 只有一个组合且失败，尝试兜底
+        if _fallback_handler:
+            fallback_data = await _fallback_handler.execute_fallback(
+                model_alias, messages, stream=False, extra_kwargs=kwargs
+            )
+            if fallback_data:
+                logger.info(f"兜底机制生效: 模型={model_alias} (唯一中转站失败)")
+                return JSONResponse(content=fallback_data["result"])
         raise HTTPException(status_code=502, detail=f"转发请求失败: {first_error or '未知错误'}")
 
     logger.info(f"启动竞速模式，共 {len(available_combos)} 个组合")
@@ -122,12 +150,22 @@ async def _forward_request(
                 errors.append(str(ex))
         tasks = list(pending)
 
+    # 竞速全部失败 → 尝试兜底
+    if _fallback_handler:
+        fallback_data = await _fallback_handler.execute_fallback(
+            model_alias, messages, stream=False, extra_kwargs=kwargs
+        )
+        if fallback_data:
+            logger.info(f"兜底机制生效: 模型={model_alias} (竞速全部失败)")
+            return JSONResponse(content=fallback_data["result"])
+
     error_detail = "; ".join(errors[:3]) or "所有中转站均请求失败"
     logger.error(f"竞速结果: 全部失败 - {error_detail}")
     raise HTTPException(status_code=502, detail=f"所有中转站均请求失败: {error_detail}")
 
 
 async def _stream_with_failover(
+    model_alias: str,
     combos: List[Dict[str, Any]],
     messages: List[Dict[str, str]],
     kwargs: Dict[str, Any],
@@ -164,7 +202,18 @@ async def _stream_with_failover(
             yield chunk
         return
 
-    # 所有组合均失败
+    # 所有组合均失败 → 尝试兜底
+    if _fallback_handler and model_alias:
+        fallback_gen = await _fallback_handler.execute_fallback_stream(
+            model_alias, messages, kwargs
+        )
+        if fallback_gen:
+            logger.info(f"流式故障转移全部失败，兜底机制生效: 模型={model_alias}")
+            async for chunk in fallback_gen:
+                yield chunk
+            return
+
+    # 无兜底或兜底也失败
     error_detail = "; ".join(errors)
     logger.error(f"流式故障转移: 全部失败 - {error_detail}")
     error_msg = _json.dumps({
