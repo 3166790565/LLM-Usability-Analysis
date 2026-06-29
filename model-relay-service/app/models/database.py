@@ -41,4 +41,31 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_tested_at ON test_results(tested_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_model_id ON test_results(model_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_alias_name ON test_results(alias_name)")
+
+        # token_usage 表
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS token_usage (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider_id       TEXT NOT NULL,
+                provider_name     TEXT,
+                model_id          TEXT NOT NULL,
+                alias_name        TEXT,
+                key_id            TEXT,
+                prompt_tokens     INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                total_tokens      INTEGER DEFAULT 0,
+                request_ip        TEXT,
+                created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # 兼容旧表，新增列
+        for col in ["request_ip"]:
+            try:
+                await db.execute(f"ALTER TABLE token_usage ADD COLUMN {col} TEXT")
+            except aiosqlite.OperationalError:
+                pass  # 列已存在
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_provider_id ON token_usage(provider_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_key_id ON token_usage(key_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_model_id ON token_usage(model_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at)")
         await db.commit()

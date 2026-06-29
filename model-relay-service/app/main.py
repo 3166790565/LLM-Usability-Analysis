@@ -17,6 +17,7 @@ from app.services.fallback_handler import FallbackHandler
 from app.models.database import init_db
 from app.web.routes_api import router as api_router, init as init_api
 from app.web.routes_ui import router as ui_router, init as init_ui
+from app.web.routes_stats import router as stats_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,6 +65,7 @@ init_ui(providers_mgr, settings_mgr, tester, fallback_mgr)
 # 注册路由
 app.include_router(api_router)
 app.include_router(ui_router)
+app.include_router(stats_router)
 
 
 @app.get("/")

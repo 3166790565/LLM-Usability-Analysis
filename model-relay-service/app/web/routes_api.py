@@ -1,10 +1,13 @@
 import asyncio
+import json as _json
 import logging
+from datetime import datetime
 import time
 from typing import List, Dict, Any, Optional, AsyncGenerator
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
+from app.models.database import get_db
 from app.models.schemas import (
     ChatCompletionRequest, ChatMessage, ModelList, ModelInfo,
     ResponsesRequest, AnthropicRequest, GeminiRequest
@@ -38,6 +41,37 @@ def init(
 
 
 # ========== 辅助函数 ==========
+
+async def _record_token_usage(
+    provider_id: str,
+    provider_name: str,
+    model_id: str,
+    alias_name: str,
+    key_id: str,
+    usage: dict,
+    request_ip: str = ""
+):
+    """异步记录 token 用量到数据库"""
+    if not usage:
+        return
+    try:
+        prompt_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0)
+        total_tokens = usage.get("total_tokens", 0) or (prompt_tokens + completion_tokens)
+        async with get_db() as db:
+            await db.execute(
+                """INSERT INTO token_usage
+                (provider_id, provider_name, model_id, alias_name, key_id,
+                 prompt_tokens, completion_tokens, total_tokens, request_ip, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (provider_id, provider_name, model_id, alias_name, key_id,
+                 prompt_tokens, completion_tokens, total_tokens, request_ip,
+                 datetime.now().isoformat())
+            )
+            await db.commit()
+    except Exception as e:
+        logger.exception("记录 token 用量失败: %s", e)
+
 
 async def _forward_request(
     model_alias: str,
@@ -99,13 +133,30 @@ async def _forward_request(
         client = ProviderClient(combo["url"], combo["key"], timeout=req_timeout,
                                 service_type=combo["service_type"])
         result = await client.chat_completion(messages, combo["real_model_id"], **kwargs)
-        return {"result": result, "provider_name": combo["provider_name"], "key_id": combo["key_id"]}
+        return {
+            "result": result,
+            "provider_name": combo["provider_name"],
+            "provider_id": combo["provider_id"],
+            "key_id": combo["key_id"],
+            "real_model_id": combo["real_model_id"],
+            "alias_name": model_alias
+        }
 
     # 先尝试首个最优组合
     first_error = None
     if race_timeout > 0:
         try:
             data = await asyncio.wait_for(_do_request(available_combos[0]), timeout=race_timeout)
+            # 异步记录 token 用量
+            asyncio.create_task(_record_token_usage(
+                provider_id=data.get("provider_id", ""),
+                provider_name=data.get("provider_name", ""),
+                model_id=data.get("real_model_id", ""),
+                alias_name=data.get("alias_name", ""),
+                key_id=data.get("key_id", ""),
+                usage=data["result"].get("usage", {}),
+                request_ip=""
+            ))
             return JSONResponse(content=data["result"])
         except asyncio.TimeoutError:
             first_error = f"首个中转站超时 ({race_timeout}s)"
@@ -116,6 +167,16 @@ async def _forward_request(
     else:
         try:
             data = await _do_request(available_combos[0])
+            # 异步记录 token 用量
+            asyncio.create_task(_record_token_usage(
+                provider_id=data.get("provider_id", ""),
+                provider_name=data.get("provider_name", ""),
+                model_id=data.get("real_model_id", ""),
+                alias_name=data.get("alias_name", ""),
+                key_id=data.get("key_id", ""),
+                usage=data["result"].get("usage", {}),
+                request_ip=""
+            ))
             return JSONResponse(content=data["result"])
         except Exception as e:
             first_error = str(e)
@@ -145,6 +206,16 @@ async def _forward_request(
                 for p in pending:
                     p.cancel()
                 logger.info(f"竞速成功: {data['provider_name']} / key={data['key_id']}")
+                # 异步记录 token 用量
+                asyncio.create_task(_record_token_usage(
+                    provider_id=data.get("provider_id", ""),
+                    provider_name=data.get("provider_name", ""),
+                    model_id=data.get("real_model_id", ""),
+                    alias_name=data.get("alias_name", ""),
+                    key_id=data.get("key_id", ""),
+                    usage=data["result"].get("usage", {}),
+                    request_ip=""
+                ))
                 return JSONResponse(content=data["result"])
             except Exception as ex:
                 errors.append(str(ex))
@@ -195,11 +266,42 @@ async def _stream_with_failover(
             errors.append(f"{combo['provider_name']}/{combo['key_id']}: 上游返回错误")
             continue
 
-        # 请求成功，继续流式输出
-        logger.info(f"流式故障转移成功: {combo['provider_name']}/{combo['key_id']}")
-        yield first_chunk
+        # 请求成功，收集所有 chunk 并查找 usage
+        chunks = [first_chunk]
         async for chunk in stream:
-            yield chunk
+            chunks.append(chunk)
+
+        # 从最后一个含 usage 的 chunk 中提取 token 数据
+        usage_data = {}
+        for c in reversed(chunks):
+            decoded = c.decode("utf-8", errors="replace")
+            if decoded.startswith("data: ") and '"usage"' in decoded:
+                try:
+                    json_str = decoded[6:]  # 去掉 "data: " 前缀
+                    if json_str.strip() == "[DONE]":
+                        continue
+                    data = _json.loads(json_str)
+                    usage_data = data.get("usage", {})
+                    if usage_data:
+                        break
+                except _json.JSONDecodeError:
+                    continue
+
+        # 异步记录 token
+        if usage_data:
+            asyncio.create_task(_record_token_usage(
+                provider_id=combo["provider_id"],
+                provider_name=combo["provider_name"],
+                model_id=combo["real_model_id"],
+                alias_name=model_alias,
+                key_id=combo["key_id"],
+                usage=usage_data,
+                request_ip=""
+            ))
+
+        logger.info(f"流式故障转移成功: {combo['provider_name']}/{combo['key_id']}")
+        for c in chunks:
+            yield c
         return
 
     # 所有组合均失败 → 尝试兜底

@@ -1,0 +1,433 @@
+{% extends "base.html" %}
+{% block title %}Token 统计{% endblock %}
+{% block content %}
+<div class="container-fluid">
+    <h2 class="mb-4">Token 统计</h2>
+
+    <!-- 筛选栏 -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form id="filterForm" class="row g-3 align-items-end">
+                <div class="col-md-2">
+                    <label class="form-label">中转站</label>
+                    <select id="filterProvider" class="form-select form-select-sm">
+                        <option value="">全部</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">API Key</label>
+                    <select id="filterKey" class="form-select form-select-sm">
+                        <option value="">全部</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">模型</label>
+                    <select id="filterModel" class="form-select form-select-sm">
+                        <option value="">全部</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">开始日期</label>
+                    <input type="date" id="filterStartDate" class="form-control form-control-sm">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">结束日期</label>
+                    <input type="date" id="filterEndDate" class="form-control form-control-sm">
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary btn-sm w-100">查询</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 总览卡片 -->
+    <div class="row mb-4 g-3">
+        <div class="col-md-3">
+            <div class="card text-bg-primary">
+                <div class="card-body">
+                    <h6 class="card-title">总 Token 数</h6>
+                    <h3 id="totalTokens" class="mb-0">-</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-bg-success">
+                <div class="card-body">
+                    <h6 class="card-title">总请求次数</h6>
+                    <h3 id="totalRequests" class="mb-0">-</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-bg-info">
+                <div class="card-body">
+                    <h6 class="card-title">今日 Token</h6>
+                    <h3 id="todayTokens" class="mb-0">-</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card text-bg-warning">
+                <div class="card-body">
+                    <h6 class="card-title">平均 Token/请求</h6>
+                    <h3 id="avgTokens" class="mb-0">-</h3>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 饼图 + 柱状图 -->
+    <div class="row mb-4 g-3">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">按中转站 Token 占比</div>
+                <div class="card-body">
+                    <canvas id="pieChart" height="250"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">按模型 Token 排行</div>
+                <div class="card-body">
+                    <canvas id="barChart" height="250"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 折线图 -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>每日 Token 趋势</span>
+            <div class="btn-group btn-group-sm">
+                <button type="button" class="btn btn-outline-secondary trend-btn active" data-days="7">7天</button>
+                <button type="button" class="btn btn-outline-secondary trend-btn" data-days="30">30天</button>
+                <button type="button" class="btn btn-outline-secondary trend-btn" data-days="90">90天</button>
+            </div>
+        </div>
+        <div class="card-body">
+            <canvas id="lineChart" height="200"></canvas>
+        </div>
+    </div>
+
+    <!-- Token 明细表格 -->
+    <div class="card">
+        <div class="card-header">Token 使用明细</div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover" id="detailTable">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>中转站</th>
+                            <th>模型</th>
+                            <th>Key</th>
+                            <th>输入 Token</th>
+                            <th>输出 Token</th>
+                            <th>总计</th>
+                            <th>时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="detailBody">
+                        <tr><td colspan="8" class="text-center text-muted">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <nav>
+                <ul class="pagination pagination-sm justify-content-center" id="detailPagination"></ul>
+            </nav>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+// ======== 全局状态 ========
+let pieChart = null, barChart = null, lineChart = null;
+let currentPage = 1;
+
+// ======== 颜色调色板 ========
+const COLORS = [
+    '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
+    '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
+    '#86bcb6', '#8cd17d', '#b6992d', '#499894', '#d37295'
+];
+
+// ======== 加载筛选选项 ========
+async function loadFilters() {
+    try {
+        const resp = await fetch('/ui/stats/filters');
+        const data = await resp.json();
+        const providerSel = document.getElementById('filterProvider');
+        const keySel = document.getElementById('filterKey');
+        const modelSel = document.getElementById('filterModel');
+
+        data.providers.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.id; opt.textContent = p.name || p.id;
+            providerSel.appendChild(opt);
+        });
+        data.keys.forEach(k => {
+            const opt = document.createElement('option');
+            opt.value = k; opt.textContent = k.substring(0, 20) + '...';
+            keySel.appendChild(opt);
+        });
+        data.models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m; opt.textContent = m;
+            modelSel.appendChild(opt);
+        });
+    } catch (e) {
+        console.error('加载筛选选项失败:', e);
+    }
+}
+
+// ======== 获取筛选参数 ========
+function getFilterParams(extra) {
+    const params = new URLSearchParams();
+    const providerId = document.getElementById('filterProvider').value;
+    const keyId = document.getElementById('filterKey').value;
+    const modelId = document.getElementById('filterModel').value;
+    const startDate = document.getElementById('filterStartDate').value;
+    const endDate = document.getElementById('filterEndDate').value;
+    if (providerId) params.set('provider_id', providerId);
+    if (keyId) params.set('key_id', keyId);
+    if (modelId) params.set('model_id', modelId);
+    if (startDate) params.set('start_date', startDate);
+    if (endDate) params.set('end_date', endDate);
+    if (extra) {
+        Object.entries(extra).forEach(([k, v]) => params.set(k, v));
+    }
+    return params;
+}
+
+// ======== 加载总览 ========
+async function loadSummary() {
+    try {
+        const resp = await fetch('/ui/stats/summary?' + getFilterParams());
+        const data = await resp.json();
+        document.getElementById('totalTokens').textContent = data.total_tokens.toLocaleString();
+        document.getElementById('totalRequests').textContent = data.total_requests.toLocaleString();
+        document.getElementById('todayTokens').textContent = data.today_tokens.toLocaleString();
+        document.getElementById('avgTokens').textContent = data.avg_tokens_per_request.toLocaleString();
+    } catch (e) {
+        console.error('加载总览失败:', e);
+    }
+}
+
+// ======== 饼图 ========
+async function loadPieChart() {
+    try {
+        const resp = await fetch('/ui/stats/by-provider?' + getFilterParams());
+        const data = await resp.json();
+        if (pieChart) pieChart.destroy();
+        const ctx = document.getElementById('pieChart').getContext('2d');
+        pieChart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    data: data.values,
+                    backgroundColor: data.labels.map((_, i) => COLORS[i % COLORS.length]),
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                                const pct = ((ctx.parsed / total) * 100).toFixed(1);
+                                return ctx.label + ': ' + ctx.parsed.toLocaleString() + ' (' + pct + '%)';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    } catch (e) {
+        console.error('加载饼图失败:', e);
+    }
+}
+
+// ======== 柱状图 ========
+async function loadBarChart() {
+    try {
+        const resp = await fetch('/ui/stats/by-model?' + getFilterParams());
+        const data = await resp.json();
+        if (barChart) barChart.destroy();
+        const ctx = document.getElementById('barChart').getContext('2d');
+        barChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    label: 'Token 数',
+                    data: data.values,
+                    backgroundColor: data.labels.map((_, i) => COLORS[i % COLORS.length]),
+                    borderRadius: 4,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                const count = data.counts[ctx.dataIndex];
+                                return ctx.parsed.x.toLocaleString() + ' Token (' + count + ' 次请求)';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { ticks: { callback: v => v.toLocaleString() } },
+                    y: { ticks: { font: { size: 10 } } }
+                }
+            }
+        });
+    } catch (e) {
+        console.error('加载柱状图失败:', e);
+    }
+}
+
+// ======== 折线图 ========
+async function loadLineChart(days) {
+    try {
+        const params = getFilterParams({ days: days });
+        const resp = await fetch('/ui/stats/trend?' + params);
+        const data = await resp.json();
+        if (lineChart) lineChart.destroy();
+        const ctx = document.getElementById('lineChart').getContext('2d');
+        lineChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    label: 'Token 数',
+                    data: data.values,
+                    borderColor: '#4e79a7',
+                    backgroundColor: 'rgba(78, 121, 167, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                const count = data.counts[ctx.dataIndex] || 0;
+                                return ctx.parsed.y.toLocaleString() + ' Token (' + count + ' 次请求)';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { ticks: { maxTicksLimit: 10, font: { size: 10 } } },
+                    y: { ticks: { callback: v => v.toLocaleString() } }
+                }
+            }
+        });
+    } catch (e) {
+        console.error('加载折线图失败:', e);
+    }
+}
+
+// ======== 明细表格 ========
+async function loadDetail(page) {
+    try {
+        const params = getFilterParams({ page: page, per_page: 20 });
+        const resp = await fetch('/ui/stats/detail?' + params);
+        const data = await resp.json();
+        currentPage = data.page;
+        const tbody = document.getElementById('detailBody');
+        if (data.items.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">暂无数据</td></tr>';
+        } else {
+            tbody.innerHTML = data.items.map(item => `
+                <tr>
+                    <td>${item.id}</td>
+                    <td>${escHtml(item.provider_name || '-')}</td>
+                    <td>${escHtml(item.alias_name || item.model_id)}</td>
+                    <td title="${escHtml(item.key_id)}">${escHtml((item.key_id || '').substring(0, 16))}...</td>
+                    <td>${item.prompt_tokens.toLocaleString()}</td>
+                    <td>${item.completion_tokens.toLocaleString()}</td>
+                    <td><strong>${item.total_tokens.toLocaleString()}</strong></td>
+                    <td>${item.created_at}</td>
+                </tr>
+            `).join('');
+        }
+
+        // 分页
+        const pagination = document.getElementById('detailPagination');
+        if (data.total_pages <= 1) {
+            pagination.innerHTML = '';
+        } else {
+            let html = '';
+            html += `<li class="page-item ${data.page <= 1 ? 'disabled' : ''}">
+                <a class="page-link" href="#" data-page="${data.page - 1}">上一页</a></li>`;
+            html += `<li class="page-item disabled"><span class="page-link">第 ${data.page}/${data.total_pages} 页</span></li>`;
+            html += `<li class="page-item ${data.page >= data.total_pages ? 'disabled' : ''}">
+                <a class="page-link" href="#" data-page="${data.page + 1}">下一页</a></li>`;
+            pagination.innerHTML = html;
+            pagination.querySelectorAll('a.page-link').forEach(a => {
+                a.addEventListener('click', e => {
+                    e.preventDefault();
+                    loadDetail(parseInt(a.dataset.page));
+                });
+            });
+        }
+    } catch (e) {
+        console.error('加载明细失败:', e);
+    }
+}
+
+function escHtml(text) {
+    if (!text) return '';
+    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ======== 绑定事件 ========
+document.getElementById('filterForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    refreshAll();
+});
+
+document.querySelectorAll('.trend-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.trend-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        loadLineChart(parseInt(this.dataset.days));
+    });
+});
+
+function refreshAll() {
+    loadSummary();
+    loadPieChart();
+    loadBarChart();
+    const activeTrend = document.querySelector('.trend-btn.active');
+    const days = activeTrend ? parseInt(activeTrend.dataset.days) : 30;
+    loadLineChart(days);
+    loadDetail(1);
+}
+
+// ======== 初始化 ========
+loadFilters().then(() => refreshAll());
+</script>
+{% endblock %}
